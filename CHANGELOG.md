@@ -4,6 +4,7 @@
 
 ### Schematic groups
 
+- Keep the designer's `PCB Block`, `PCB Module`, `PCB Attach` and `PCB Role` when `beautify_schematic_on_current_page` or source-path `replace_components` rebuilds a component; `block_name` only fills a missing `PCB Block`. `declaration_errors` entries now carry a stable `code` (with `component`, `block` or `property`), a conflicting block attribute stays omitted across pages and is listed in `conflicts`, and declaration read errors reach PCB validation even when no declared block remains.
 - Declare PCB blocks with component properties: `PCB Block`, `PCB Module`, `PCB Attach` and `PCB Role`. Circuit assembly writes `PCB Block` from each component's `block_name` on both assembly paths, per instance and keeping other properties; a failed write is logged and never fails assembly or skips a component. `get_schematic_groups` returns `declared_blocks`, `declared_modules` and `declaration_errors` next to the heuristic groups, merging a block across pages in full mode; conflicting block attributes are reported and omitted, and a package whose sections are declared in different blocks is reported and left out of them. Copies of a component already on the page never inherit its PCB declarations. Without declarations the result is unchanged. PCB validation receives the declarations separately from heuristic groups, so declaration problems never mark those incomplete.
 
 ### PCB layout

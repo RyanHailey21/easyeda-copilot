@@ -15,7 +15,8 @@ export function registerSchematicGroupTools(server: McpServer, bridge: Bridge) {
                 + 'maybe_blocks and wires[].pins contain space-separated references; groups may omit singleton or ambiguous components. '
                 + 'errors contains non-fatal diagnostics when the result is partial. '
                 + 'declared_blocks and declared_modules list blocks the designer declared with the PCB Block, PCB Module, PCB Attach and PCB Role component properties; '
-                + 'they are explicit and take precedence over maybe_blocks; declaration_errors reports problems with them only. '
+                + 'they are explicit and take precedence over maybe_blocks; declaration_errors reports problems with them only, each with a stable code; '
+                + 'conflicts lists block attributes omitted because members disagree. '
                 + 'Use get_schematic for values, pin names and the electrical netlist.',
             inputSchema: z.object({
                 get_full_schematic_groups: z.boolean().default(false)
