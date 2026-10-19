@@ -38,8 +38,15 @@ await call('list_checkpoints', {});
 assert.deepEqual(requests.pop(), { event: 'checkpoint-list', body: {} });
 await call('list_checkpoints', { limit: 100 });
 assert.deepEqual(requests.pop(), { event: 'checkpoint-list', body: { limit: 100 } });
+await call('list_checkpoints', { limit: 16, offset: 32 });
+assert.deepEqual(requests.pop(), { event: 'checkpoint-list', body: { limit: 16, offset: 32 } });
+await call('list_checkpoints', { offset: 0 });
+assert.deepEqual(requests.pop(), { event: 'checkpoint-list', body: { offset: 0 } });
 for (const limit of [0, -1, 513, 1.5, '100']) {
     await assert.rejects(call('list_checkpoints', { limit }));
+}
+for (const offset of [-1, 1.5, '0', Number.MAX_SAFE_INTEGER + 1, null]) {
+    await assert.rejects(call('list_checkpoints', { offset }));
 }
 for (const name of [42, 'x'.repeat(201)]) {
     await assert.rejects(call('save_checkpoint_for_current_page', { name }));

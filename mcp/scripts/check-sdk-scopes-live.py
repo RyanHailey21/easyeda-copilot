@@ -13,7 +13,7 @@ async def main():
     async with await connect(document_uuid=sys.argv[1],instance_id=sys.argv[2] if len(sys.argv)>2 else None) as s:
         started=time.monotonic()
         ids=await s.eda.pcb_PrimitiveLine.getAllPrimitiveId()
-        before=await s.eval('return (await eda.checkpointer.list()).map(c=>c._id)')
+        before=await s.eval('return (await eda.checkpointer.list({limit:512})).map(c=>c._id)')
         async with s.checkpoint_scope(f'Python scope verification {time.time()}') as scope:
             cp=scope.checkpoint_id
             marker=await scope.eda.pcb_PrimitiveLine.create('',EPCB_LayerId.DOCUMENT,0,0,10,0,1,False)
@@ -24,7 +24,7 @@ async def main():
                 assert s.last_checkpoint==cp
                 blob=await s.eda.dmt_EditorControl.getCurrentRenderedAreaImage()
                 assert isinstance(blob,Blob) and blob.size>0 and s.last_checkpoint==cp
-                after=await s.eval('return (await eda.checkpointer.list()).map(c=>c._id)')
+                after=await s.eval('return (await eda.checkpointer.list({limit:512})).map(c=>c._id)')
                 assert set(after)-set(before)=={cp}
             finally:assert await s.eda.pcb_PrimitiveLine.delete(marker)
         assert sorted(await s.eda.pcb_PrimitiveLine.getAllPrimitiveId())==sorted(ids)

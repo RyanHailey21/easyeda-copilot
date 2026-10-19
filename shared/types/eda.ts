@@ -21,7 +21,7 @@ declare global {
         checkpointer?: {
             restore: (id?: string, allAgree?: boolean) => Promise<boolean>;
             save: (minor: boolean, name?: string) => Promise<string | null>;
-            list: () => Promise<{
+            list: (options?: { limit?: number; offset?: number }) => Promise<{
                 name: string;
                 _id: string;
                 timestamp: number;

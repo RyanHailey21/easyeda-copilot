@@ -9,14 +9,15 @@ export function registerCheckpointTools(server: McpServer, bridge: Bridge) {
         'list_checkpoints',
         {
             title: 'List EasyEDA Checkpoints',
-            description: 'List saved checkpoints with names, newest first. Defaults to 16; use limit to include older checkpoints.',
+            description: 'List saved checkpoints with names, newest first. Defaults to limit 16 and offset 0; use offset to page through older checkpoints.',
             annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
             inputSchema: z.object({
                 limit: z.number().int().min(1).max(512).optional(),
+                offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
             }),
         },
-        toolHandler(bridge, async ({ limit }) => {
-            const result = await bridge.requestEasyEda('checkpoint-list', { limit });
+        toolHandler(bridge, async ({ limit, offset }) => {
+            const result = await bridge.requestEasyEda('checkpoint-list', { limit, offset });
             return textResult(result);
         }),
     );

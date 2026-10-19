@@ -1,49 +1,45 @@
-import AppDBClient from 'appdb';
+import { checkpointStore, type Checkpoint, type CheckpointListOptions } from './checkpoint-store';
 import "@copilot/shared/types/eda";
 
-interface Checkpoint {
-    _id: string,
-    timestamp: number,
-    content: string,
-    name?: string,
-    pageId?: string
-}
-
-const checkpointsDb = new AppDBClient(false).init('checkpoints', {
-    // _id is the primary key; current queries need no secondary indexes.
-    checkpoints: []
-});
-
-let lastCheckpoint: Checkpoint | undefined;
+// Persistent sources stay in IndexedDB. Only a temporary checkpoint retains content.
+let lastCheckpoint: { id: string; temporary?: Checkpoint } | undefined;
 const pinned = new Map<string, number>();
-
-const generateInsecureToken = (length = 16) => {
-    return (Math.random().toString(36).substring(2) +
-        Math.random().toString(36).substring(2) +
-        Math.random().toString(36).substring(2))
-        .substring(0, length);
-};
+let saveTail = Promise.resolve();
+let pendingSaves = 0;
+let restoring = false;
 
 const getCurrentPageId = async () => {
     const page = await eda.dmt_SelectControl.getCurrentDocumentInfo();
-    if (!page?.uuid) throw new Error('Current document UUID is unavailable');
+    if (typeof page?.uuid !== 'string' || !page.uuid) throw new Error('Current document UUID is unavailable');
     return page.uuid;
 }
 
-async function saveCheckpoint(minor: boolean, name?: string) {
+function saveCheckpoint(minor: boolean, name?: string): Promise<string | null> {
+    // Capture sources only once a save reaches the front. Bound waiting requests too.
+    if (pendingSaves >= 8) {
+        eda.sys_Message.showToastMessage('Too many pending checkpoint saves; wait and retry.', ESYS_ToastMessageType.ERROR);
+        return Promise.resolve(null);
+    }
+    pendingSaves++;
+    const operation = saveTail.then(() => createCheckpoint(minor, name));
+    saveTail = operation.then(() => undefined, () => undefined);
+    return operation.finally(() => { pendingSaves--; });
+}
+
+async function createCheckpoint(minor: boolean, name?: string) {
     try {
         if (name !== undefined && (typeof name !== 'string' || name.trim().length > 200)) {
             throw new Error('Checkpoint name must be a string of at most 200 characters');
         }
         const pageId = await getCurrentPageId();
         const content = await eda.sys_FileManager.getDocumentSource();
-        if (!content) {
+        if (typeof content !== 'string' || !content) {
             eda.sys_Message.showToastMessage('Failed insert checkpoint to db: not found content', ESYS_ToastMessageType.WARNING);
             return null;
         }
 
         const checkpoint: Checkpoint = {
-            _id: generateInsecureToken(16),
+            _id: crypto.randomUUID(),
             timestamp: Date.now(),
             content,
             ...(name?.trim() ? { name: name.trim() } : {}),
@@ -55,23 +51,12 @@ async function saveCheckpoint(minor: boolean, name?: string) {
         }
 
         if (!minor) {
-            const db = await checkpointsDb;
-            const allCheckpoints = await db.checkpoints.find({});
-
-            if (allCheckpoints.length >= 512) {
-                const sorted = allCheckpoints.sort((a, b) => a.timestamp! - b.timestamp!);
-                for (const item of sorted.slice(0, sorted.length - 99)) {
-                    if ((pinned.get(item._id!) ?? 0) > Date.now()) continue;
-                    pinned.delete(item._id!);
-                    await db.checkpoints.remove({ _id: item._id });
-                }
-            }
-
-            await db.checkpoints.insert(checkpoint);
+            for (const [id, expiresAt] of pinned) if (expiresAt <= Date.now()) pinned.delete(id);
+            await checkpointStore.add(checkpoint, id => (pinned.get(id) ?? 0) > Date.now());
             eda.sys_Message.showToastMessage('Create checkpoint', ESYS_ToastMessageType.SUCCESS);
         }
 
-        lastCheckpoint = checkpoint;
+        lastCheckpoint = { id: checkpoint._id, ...(minor ? { temporary: checkpoint } : {}) };
         return checkpoint._id;
     } catch (error) {
         eda.sys_Message.showToastMessage('Failed to save checkpoint: ' + (error as Error).message, ESYS_ToastMessageType.ERROR);
@@ -87,14 +72,25 @@ const confirmationMessage = (...args: Parameters<typeof eda.sys_Dialog.showConfi
 
 async function restoreCheckpoint(id?: string, allAgree = false, signal?: AbortSignal) {
     signal?.throwIfAborted();
+    if (restoring) {
+        eda.sys_Message.showToastMessage('A checkpoint restore is already in progress.', ESYS_ToastMessageType.ERROR);
+        return false;
+    }
+    restoring = true;
+    try { return await applyCheckpoint(id, allAgree, signal); }
+    finally { restoring = false; }
+}
+
+async function applyCheckpoint(id?: string, allAgree = false, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const previous = lastCheckpoint;
     let checkpoint: Checkpoint | undefined;
 
     if (!id) {
-        checkpoint = lastCheckpoint;
+        checkpoint = previous?.temporary ?? (previous ? await checkpointStore.get(previous.id) : undefined);
     }
     else {
-        const db = await checkpointsDb;
-        checkpoint = await db.checkpoints.find({ _id: id }).then(r => r[0]).catch(() => undefined) as Checkpoint | undefined;
+        checkpoint = await checkpointStore.get(id);
     }
     signal?.throwIfAborted();
 
@@ -105,6 +101,11 @@ async function restoreCheckpoint(id?: string, allAgree = false, signal?: AbortSi
 
     if (!checkpoint.pageId) {
         eda.sys_Message.showToastMessage('This legacy checkpoint has no document UUID and cannot be restored safely.', ESYS_ToastMessageType.ERROR);
+        return false;
+    }
+
+    if (typeof checkpoint.content !== 'string' || !checkpoint.content) {
+        eda.sys_Message.showToastMessage('This checkpoint has no valid document source.', ESYS_ToastMessageType.ERROR);
         return false;
     }
 
@@ -119,12 +120,16 @@ async function restoreCheckpoint(id?: string, allAgree = false, signal?: AbortSi
 
     signal?.throwIfAborted();
 
-    if (checkpoint === lastCheckpoint) {
-        lastCheckpoint = undefined;
+    // The confirmation dialog and UUID lookup both yield to the editor.
+    if (checkpoint.pageId !== await getCurrentPageId()) {
+        eda.sys_Message.showToastMessage('This checkpoint was not created for this page.', ESYS_ToastMessageType.ERROR);
+        return false;
     }
+    signal?.throwIfAborted();
 
     try {
         const success = await eda.sys_FileManager.setDocumentSource(checkpoint.content);
+        if (success && lastCheckpoint === previous && previous?.id === checkpoint._id) lastCheckpoint = undefined;
         eda.sys_Message.showToastMessage(success ? 'Loaded checkpoint' : 'Fail load checkpoint', success ? ESYS_ToastMessageType.SUCCESS : ESYS_ToastMessageType.ERROR);
         return success;
     } catch (error) {
@@ -133,10 +138,9 @@ async function restoreCheckpoint(id?: string, allAgree = false, signal?: AbortSi
     }
 }
 
-async function listCheckpoints() {
-    const db = await checkpointsDb;
+async function listCheckpoints(options?: CheckpointListOptions) {
     const currentPageId = await getCurrentPageId();
-    const checkpoints = await db.checkpoints.find({}).catch(() => []) as Checkpoint[];
+    const checkpoints = await checkpointStore.listMetadata(options);
 
     return checkpoints
         .map(checkpoint => ({
@@ -145,13 +149,11 @@ async function listCheckpoints() {
             name: checkpoint.name == null ? `Unnamed — ${new Date(checkpoint.timestamp).toISOString()}` : String(checkpoint.name),
             pageId: checkpoint.pageId,
             isCurrentPage: Boolean(checkpoint.pageId) && checkpoint.pageId === currentPageId,
-        }))
-        .sort((a, b) => b.timestamp - a.timestamp);
+        }));
 }
 
 async function readCheckpoint(id: string) {
-    const db = await checkpointsDb;
-    const checkpoint = await db.checkpoints.find({ _id: id }).then(r => r[0]).catch(() => undefined) as Checkpoint | undefined;
+    const checkpoint = await checkpointStore.get(id);
     if (!checkpoint) return null;
 
     return {

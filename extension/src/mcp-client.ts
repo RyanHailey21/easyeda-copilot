@@ -1957,10 +1957,14 @@ async function handleMessage(message: McpMessage, connectionEpoch: number, signa
 
         if (message.event === 'checkpoint-list') {
             const limit = body.limit ?? 16;
+            const offset = body.offset ?? 0;
             if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 512) {
                 throw new Error('Checkpoint limit must be an integer between 1 and 512');
             }
-            reply(true, await checkpointer.list().then(cs => cs.slice(0, limit)));
+            if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) {
+                throw new Error('Checkpoint offset must be a non-negative safe integer');
+            }
+            reply(true, await checkpointer.list({ limit, offset }));
             return;
         }
 

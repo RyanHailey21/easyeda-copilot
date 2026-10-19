@@ -7,7 +7,7 @@ const s=await connect({documentUuid,instanceId,checkpointScope:false});
 let marker; const started=Date.now();
 try {
     const ids=await s.eda.pcb_PrimitiveLine.getAllPrimitiveId();
-    const before=await s.eval('return (await eda.checkpointer.list()).map(c=>c._id)');
+    const before=await s.eval('return (await eda.checkpointer.list({limit:512})).map(c=>c._id)');
     let checkpoint;
     await s.checkpointScope(`Node scope verification ${started}`,async scope=>{
         checkpoint=scope.checkpointId;
@@ -20,7 +20,7 @@ try {
             const blob=await s.eda.dmt_EditorControl.getCurrentRenderedAreaImage();
             assert(blob instanceof Blob && blob.size>0);
             assert.equal(s.lastCheckpoint,checkpoint);
-            const after=await s.eval('return (await eda.checkpointer.list()).map(c=>c._id)');
+            const after=await s.eval('return (await eda.checkpointer.list({limit:512})).map(c=>c._id)');
             assert.deepEqual(after.filter(id=>!before.includes(id)),[checkpoint]);
         } finally {await s.eda.pcb_PrimitiveLine.delete(marker);marker=undefined;}
     });
