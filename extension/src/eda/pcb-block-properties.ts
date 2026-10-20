@@ -49,3 +49,28 @@ export function storePcbBlockOnPrimitive(primitive: PropertyPrimitive, block: st
         return true;
     } catch { return false; }
 }
+
+/** Declaration properties set on a component, by property name. Rebuilding a
+ * component (beautify, replacement) restores them, so the designer's
+ * declarations survive the new layout. */
+export function pcbBlockProperties(properties: Record<string, unknown> | null | undefined): Record<string, string> {
+    const kept: Record<string, string> = {};
+    for (const key of PCB_BLOCK_PROPERTY_KEYS) {
+        const value = text(properties?.[key]);
+        if (value) kept[key] = value;
+    }
+    return kept;
+}
+
+/** Never throws: writes saved declaration properties over the current ones and
+ * keeps everything else. Returns false when they could not be written. */
+export function restorePcbBlockProperties(primitive: PropertyPrimitive, saved: Record<string, string> | undefined): boolean {
+    if (!saved || !Object.keys(saved).length) return true;
+    try {
+        if (!primitive.setState_OtherProperty || !primitive.getState_OtherProperty) return false;
+        const properties = primitive.getState_OtherProperty() ?? {};
+        if (Object.entries(saved).every(([key, value]) => properties[key] === value)) return true;
+        primitive.setState_OtherProperty({ ...properties, ...saved } as Record<string, string | number | boolean>);
+        return true;
+    } catch { return false; }
+}

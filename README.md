@@ -1,4 +1,4 @@
-English | [简体中文](https://github.com/biosshot/easyeda-copilot/blob/main/README.zh-CN.md) | [Русский](https://github.com/biosshot/easyeda-copilot/blob/main/README.ru.md)
+English | [简体中文](https://github.com/biosshot/easyeda-copilot/blob/main/README.zh-CN.md) | [Русский](https://github.com/biosshot/easyeda-copilot/blob/main/README.ru.md) | [Español](https://github.com/biosshot/easyeda-copilot/blob/main/README.es.md)
 
 # <img src="https://raw.githubusercontent.com/biosshot/easyeda-copilot/main/extension/images/logo.png" alt="" width="42"> EasyEDA Copilot
 

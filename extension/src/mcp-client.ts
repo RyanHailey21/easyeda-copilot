@@ -20,6 +20,7 @@ import {
 } from './eda/pcb';
 import { getOtherPageSignals, getSchematic } from './eda/schematic';
 import { getSchematicGroups, mergeSchematicGroups } from './eda/schematic-groups';
+import { pcbBlockProperties, restorePcbBlockProperties } from './eda/pcb-block-properties';
 import { assertMcpDocumentContext } from './eda/mcp-document-context';
 import { serializeProjectInfo } from './eda/project-info';
 import { estimateSchematicSheetSpace } from './eda/sheet-space';
@@ -225,6 +226,8 @@ type BeautifyComponentIdentity = {
     designator: string;
     subPartName: string;
     uniqueId: string;
+    /** PCB block declarations set by the designer; beautify must not replace them. */
+    pcb: Record<string, string>;
 };
 
 async function getBeautifyComponentIdentities(expectedDesignators: string[]) {
@@ -238,6 +241,7 @@ async function getBeautifyComponentIdentities(expectedDesignators: string[]) {
             designator,
             subPartName: component.getState_SubPartName?.() ?? '',
             uniqueId,
+            pcb: readBeautifyDeclarations(component, designator),
         } satisfies BeautifyComponentIdentity];
     });
 }
@@ -258,7 +262,18 @@ async function restoreBeautifyComponentIdentities(saved: BeautifyComponentIdenti
         }
         available.delete(component);
         component.setState_UniqueId(identity.uniqueId);
+        if (!restorePcbBlockProperties(component, identity.pcb)) {
+            eda.sys_Log.add(`PCB block declarations not restored for ${identity.designator}`, ESYS_LogType.WARNING);
+        }
         await component.done();
+    }
+}
+
+function readBeautifyDeclarations(component: { getState_OtherProperty?(): Record<string, unknown> | null | undefined }, designator: string) {
+    try { return pcbBlockProperties(component.getState_OtherProperty?.()); }
+    catch {
+        eda.sys_Log.add(`PCB block declarations of ${designator} unreadable before beautify`, ESYS_LogType.WARNING);
+        return {};
     }
 }
 

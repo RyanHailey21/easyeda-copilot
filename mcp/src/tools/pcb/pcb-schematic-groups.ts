@@ -40,8 +40,9 @@ export function toPcbSchematicGroups(source: SchematicGroups, circuit: ExplainCi
  * Unknown references are dropped and reported through `incomplete`. */
 function toPcbBlockDeclarations(source: SchematicGroups, designators: Set<string>): PcbBlockDeclarations | undefined {
     try {
-        if (!source.declared_blocks?.length) return undefined;
         let incomplete = !!source.declaration_errors?.length;
+        // Read problems still reach validation when no declaration survived them.
+        if (!source.declared_blocks?.length) return incomplete ? { blocks: [], incomplete: true } : undefined;
         const blocks = source.declared_blocks.flatMap(block => {
             if (typeof block?.name !== 'string' || !block.name || typeof block.refs !== 'string') { incomplete = true; return []; }
             const components = new Set<string>();
