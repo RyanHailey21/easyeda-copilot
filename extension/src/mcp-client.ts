@@ -1207,8 +1207,12 @@ async function getAllProjectsTree(): Promise<ProjectTreeTeam[]> {
     const result: ProjectTreeTeam[] = [];
 
     for (const team of teams) {
-        const folderUuids = await eda.dmt_Folder.getAllFoldersUuid(team.uuid);
-        const projectUuids = await eda.dmt_Project.getAllProjectsUuid(team.uuid);
+        const folderUuids = await withTimeout(
+            () => eda.dmt_Folder.getAllFoldersUuid(team.uuid), 10_000,
+        ).catch(() => []);
+        const projectUuids = await withTimeout(
+            () => eda.dmt_Project.getAllProjectsUuid(team.uuid), 10_000,
+        ).catch(() => []);
         const folders: IDMT_FolderItem[] = [];
         const projects: IDMT_BriefProjectItem[] = [];
 
