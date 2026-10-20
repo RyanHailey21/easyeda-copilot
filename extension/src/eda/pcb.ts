@@ -13,6 +13,7 @@ import { PcbLayerName } from "@copilot/shared/types/pcb/shared";
 import { milToMm, mmToMil, round, safeString, VERSION_EDASYEDA } from "./utils";
 import { easyEdaPointToPlacement, easyEdaRotationToPlacement } from "./pcb-existing-placement";
 import { previewRotationRadians } from "./pcb-preview-rotation";
+import { arcPoints } from "./polygon-arc";
 
 const MIL_TO_MM = 25.4 / 1000;
 const SNAP_TOLERANCE_MIL = mmToMil(0.05);
@@ -186,11 +187,12 @@ function polygonSourceToPoints(source: TPCB_PolygonSourceArray) {
         }
 
         if (token === "ARC" || token === "CARC") {
-            while (isNumberToken(source[index]) && isNumberToken(source[index + 1])) {
-                const next = source[index + 2];
-                points.push({ x: source[index] as number, y: source[index + 1] as number });
-                index += 2;
-                if (typeof next === "string") break;
+            // Each segment is a sweep angle followed by the end point.
+            while (isNumberToken(source[index]) && isNumberToken(source[index + 1]) && isNumberToken(source[index + 2])) {
+                const end = { x: source[index + 1] as number, y: source[index + 2] as number };
+                const start = points[points.length - 1];
+                points.push(...(start ? arcPoints(start, end, source[index] as number) : [end]));
+                index += 3;
             }
             continue;
         }

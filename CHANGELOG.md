@@ -11,6 +11,10 @@
 
 - Honor explicit `PCB_LAYOUT_SUBTREE_WORKERS`, `PCB_BOARD_PACKER_THREADS` and `PCB_POST_PLACE_THREADS` values up to the number of logical cores instead of clamping them to the default. The default stays at half the logical cores, at most 8. Requires a backend that applies the same rule.
 
+### PCB fixes
+
+- Read `ARC`/`CARC` segments in board outlines and copper polygons as sweep angle plus end point and flatten them into points on the arc. The sweep angle was read as a coordinate, so outlines with rounded corners came back with stray points and diagonal edges in `get_current_pcb`, the preview and router regions such as `board()`.
+
 ## 1.3.2 - 2026-10-16
 
 ### Schematic fixes
