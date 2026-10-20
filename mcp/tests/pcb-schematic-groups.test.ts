@@ -23,7 +23,7 @@ test('no declarations keep the previous contract', () => {
 });
 
 test('unknown references, declaration errors and malformed entries mark only the declarations incomplete', () => {
-    const result = toPcbSchematicGroups({ maybe_blocks: [], wires: [], declaration_errors: ['conflict'], declared_blocks: [
+    const result = toPcbSchematicGroups({ maybe_blocks: [], wires: [], declaration_errors: [{ code: 'PCB_DECLARATION_CONFLICT', message: 'conflict' }], declared_blocks: [
         { name: 'mcu', refs: 'U1 U9' }, { name: '', refs: 'C1' }, { name: 'ghost', refs: 'X1' }, null as never,
     ] }, circuit);
     assert.equal(result.incomplete, undefined);
@@ -39,4 +39,12 @@ test('a physical package declared in two blocks is left out of both and marks th
     assert.deepEqual(result.declarations, { blocks: [
         { name: 'preamp', components: ['U1'] }, { name: 'filter', components: ['C1'] },
     ], incomplete: true });
+});
+
+test('declaration errors reach validation even when no declaration survived them', () => {
+    const issue = { code: 'PCB_DECLARATION_READ' as const, component: 'U1', message: 'U1: component properties unavailable; PCB block declaration omitted.' };
+    const result = toPcbSchematicGroups({ maybe_blocks: [], wires: [], declaration_errors: [issue] }, circuit);
+    assert.deepEqual(result.declarations, { blocks: [], incomplete: true });
+    assert.equal(result.incomplete, undefined, 'heuristic groups stay complete');
+    assert.equal(toPcbSchematicGroups({ maybe_blocks: [], wires: [] }, circuit).declarations, undefined);
 });

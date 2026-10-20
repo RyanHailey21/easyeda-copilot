@@ -22,13 +22,18 @@ function load(relative: string, imports: Record<string, unknown>, globals: Recor
     return exports;
 }
 
-function editor(options: { version?: number; changePage?: boolean; failWires?: boolean; missingPin?: boolean; duplicate?: boolean; staleOnce?: boolean; subPartName?: string; failPins?: boolean; failNetlist?: boolean; conflicting?: boolean; badWire?: boolean } = {}) {
+function editor(options: { version?: number; changePage?: boolean; failWires?: boolean; missingPin?: boolean; duplicate?: boolean; staleOnce?: boolean; subPartName?: string; failPins?: boolean; failNetlist?: boolean; conflicting?: boolean; badWire?: boolean; properties?: Record<string, Record<string, unknown> | 'throw'> } = {}) {
     let pageReads = 0, netReads = 0, wireReads = 0;
     const calls: string[] = [];
     const raw = (id: string, designator: string, x: number, kind = 'component') => ({
         getState_PrimitiveId: () => id, getState_Designator: () => designator,
         getState_ComponentType: () => kind, getState_SubPartName: () => id === 'r' ? options.subPartName ?? '' : '',
         getState_X: () => x, getState_Y: () => options.version === 2 ? -50 : 50,
+        ...(options.properties ? { getState_OtherProperty: () => {
+            const value = options.properties![id];
+            if (value === 'throw') throw new Error('properties unavailable');
+            return value;
+        } } : {}),
     });
     const primitives = [raw('r', 'R1', 0), raw('c', options.duplicate ? 'R1' : 'C1', 20), raw('flag', '3V3|flag', 1e6, 'flag')];
     const api = {
@@ -231,4 +236,13 @@ test('cannot read any component list remains a fatal read error', async () => {
     const e = editor();
     e.api.sch_PrimitiveComponent.getAll = async () => { throw new Error('component list unavailable'); };
     await assert.rejects(e.run(), /component list unavailable/);
+});
+
+test('live adapter reads PCB block declarations from component properties and reports unreadable ones', async () => {
+    const result = await editor({ properties: { r: { 'PCB Block': 'mcu', 'PCB Role': 'mcu', Other: 'x' }, c: 'throw' } }).run();
+    assert.equal(JSON.stringify(result.declared_blocks), JSON.stringify([{ name: 'mcu', refs: 'R1', role: 'mcu' }]));
+    assert.equal(JSON.stringify(result.declaration_errors), JSON.stringify([{ code: 'PCB_DECLARATION_READ', component: 'C1',
+        message: 'C1: component properties unavailable; PCB block declaration omitted.' }]));
+    assert.equal(JSON.stringify(result.maybe_blocks), JSON.stringify(expected.maybe_blocks), 'heuristic groups are unaffected');
+    assert.equal(result.errors, undefined);
 });

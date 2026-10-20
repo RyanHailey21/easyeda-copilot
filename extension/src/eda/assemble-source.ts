@@ -22,7 +22,7 @@ import { normalizeMultipartSourceDesignators } from "./multipart-source-designat
 import { LEGACY_PORT_LENGTHS, matchingWirePort, wirePortLabel, wirePortLengths, wirePortMinLength } from './wire-port-layout';
 import { formatUnresolvedNetPortMessage, type UnresolvedNetPortSample } from './unresolved-net-port-message';
 import { readPartUuidFromPrimitive, storePartUuidOnPrimitive } from './component-part-ref';
-import { assemblyPcbBlock, PCB_BLOCK_PROPERTY_KEYS, storePcbBlockOnPrimitive } from './pcb-block-properties';
+import { assemblyPcbBlock, PCB_BLOCK_PROPERTIES, PCB_BLOCK_PROPERTY_KEYS, pcbBlockProperties, restorePcbBlockProperties, storePcbBlockOnPrimitive } from './pcb-block-properties';
 import { samePartUuid } from '@copilot/shared/types/lcsc';
 import { DRAWING_LIBRARY_UUID, DRAWING_SHEETS, selectDrawingSheet } from './schematic-page-geometry';
 
@@ -56,6 +56,8 @@ interface ReplacementContext {
     oldPrimitiveId: string;
     oldPins: ReplacementPinSnapshot[];
     preservedAttributes: Map<string, unknown>;
+    /** The replaced component's PCB block declarations, restored after assembly. */
+    pcbProperties: Record<string, string>;
     shiftX: number;
     shiftY: number;
 }
@@ -1292,6 +1294,7 @@ async function bindReplacementPlans(
                 oldPrimitiveId: target.primitiveId,
                 oldPins: oldPinSnapshots,
                 preservedAttributes,
+                pcbProperties: pcbBlockProperties(Object.fromEntries(oldAttributes)),
                 shiftX: 0,
                 shiftY: 0,
             };
@@ -2009,13 +2012,20 @@ async function setSourceAndRefresh(source: string, label: string): Promise<void>
 async function finalizeSourceComponents(plans: PlannedComponent[], signal?: AbortSignal): Promise<void> {
     const named = new Map<string, string>();
     const blocks = new Map<string, string>();
+    const declared = new Map<string, Record<string, string>>();
     const ids = new Set<string>();
     for (const plan of plans) {
         if (!plan.primitiveId) continue;
         ids.add(plan.primitiveId);
         if (isNamedNetSymbol(plan.input)) named.set(plan.primitiveId, getSpecialSignalName(plan.input));
-        // Each instance gets its own block: clones inherit the seed's properties.
-        else { const block = assemblyPcbBlock(plan.input); if (block) blocks.set(plan.primitiveId, block); }
+        else {
+            // A replaced component keeps the designer's declarations; otherwise each
+            // instance gets its own block, since clones inherit the seed's properties.
+            const kept = plan.replacement?.pcbProperties ?? {};
+            if (Object.keys(kept).length) declared.set(plan.primitiveId, kept);
+            const block = kept[PCB_BLOCK_PROPERTIES.block] ? undefined : assemblyPcbBlock(plan.input);
+            if (block) blocks.set(plan.primitiveId, block);
+        }
     }
 
     let completed = 0;
@@ -2041,6 +2051,9 @@ async function finalizeSourceComponents(plans: PlannedComponent[], signal?: Abor
             const block = blocks.get(id);
             if (block && !storePcbBlockOnPrimitive(editable, block)) {
                 eda.sys_Log.add(`[source-assemble] PCB Block property not written for ${id}`, ESYS_LogType.WARNING);
+            }
+            if (!restorePcbBlockProperties(editable, declared.get(id))) {
+                eda.sys_Log.add(`[source-assemble] PCB block declarations not restored for ${id}`, ESYS_LogType.WARNING);
             }
             await withTimeout(editable.done(), 10_000, `Timed out finalizing component ${id}`, signal);
             completed++;

@@ -1,4 +1,4 @@
-import type { SchematicGroups } from '@copilot/shared/types/schematic-groups';
+import type { SchematicDeclarationIssue, SchematicGroups } from '@copilot/shared/types/schematic-groups';
 import { shortSymbolsMap } from './types';
 import { PCB_BLOCK_PROPERTIES, readPcbDeclaration, type PcbDeclaration } from './pcb-block-properties';
 
@@ -82,6 +82,33 @@ function diagnostics(scope?: string) {
     };
 }
 
+type DeclarationIssue = SchematicDeclarationIssue;
+type DeclarationReport = (issue: Omit<DeclarationIssue, 'code'> & { code: Exclude<DeclarationIssue['code'], 'PCB_DECLARATION_MORE'> }, cause?: unknown) => void;
+const ATTRIBUTE_FIELD = { module: 'module', attach: 'attach_to', role: 'role' } as const;
+const ATTRIBUTE_KEY = { module: 'module', attach_to: 'attach', role: 'role' } as const;
+
+/** Declaration problems keep a stable code; same bound and editor log as other diagnostics. */
+function declarationDiagnostics() {
+    const issues = new Map<string, DeclarationIssue>();
+    const report: DeclarationReport = (issue, cause) => {
+        const key = issue.code + '\u0000' + issue.message;
+        if (issues.has(key)) return;
+        issues.set(key, { ...issue, message: issue.message.replace(/\s+/g, ' ').slice(0, 200) });
+        try {
+            if (typeof eda !== 'undefined') eda.sys_Log.add(`[schematic-groups declarations] ${issue.code} ${issue.message}${cause
+                ? ` ${cause instanceof Error ? cause.stack ?? cause.message : String(cause)}` : ''}`, ESYS_LogType.WARNING);
+        } catch { /* Logging must not discard a partial result. */ }
+    };
+    return {
+        report, result: (): Pick<SchematicGroups, 'declaration_errors'> => {
+            const all = [...issues.values()];
+            if (!all.length) return {};
+            if (all.length <= 10) return { declaration_errors: all };
+            return { declaration_errors: [...all.slice(0, 9), { code: 'PCB_DECLARATION_MORE', message: `${all.length - 9} additional declaration problems; see editor log.` }] };
+        },
+    };
+}
+
 /** Concatenate page-local results without inventing cross-page groups or wire islands.
  * Declarations name their block explicitly, so one block may span pages. */
 export function mergeSchematicGroups(pages: readonly SchematicGroups[]): SchematicGroups {
@@ -90,20 +117,22 @@ export function mergeSchematicGroups(pages: readonly SchematicGroups[]): Schemat
         wires: pages.flatMap(page => page.wires),
     };
     const errors = boundedDiagnostics(pages.flatMap(page => page.errors ?? []));
-    const issues = diagnostics('declarations');
-    for (const message of pages.flatMap(page => page.declaration_errors ?? [])) issues.report(message);
+    const issues = declarationDiagnostics();
+    // A page's PCB_DECLARATION_MORE stands for problems it kept in the editor log; keep it.
+    for (const issue of pages.flatMap(page => page.declaration_errors ?? [])) issues.report(issue as Parameters<DeclarationReport>[0]);
     let declared: Pick<SchematicGroups, 'declared_blocks' | 'declared_modules'> = {};
     try {
         declared = declarationResult(pages.flatMap(page => (page.declared_blocks ?? []).map(block => ({
             name: block.name, refs: block.refs.split(/\s+/).filter(Boolean).map(ref => ({ ref, base: sectionBase(ref) })),
             values: { module: block.module, attach: block.attach_to, role: block.role },
+            conflicts: new Set((block.conflicts ?? []).map(field => ATTRIBUTE_KEY[field])),
         }))), issues.report);
-    } catch (error) { issues.report('PCB block declarations could not be merged; omitted.', error); }
-    const declarationErrors = issues.result().errors;
-    return { ...result, ...(errors.length ? { errors } : {}), ...declared, ...(declarationErrors ? { declaration_errors: declarationErrors } : {}) };
+    } catch (error) { issues.report({ code: 'PCB_DECLARATION_UNAVAILABLE', message: 'PCB block declarations could not be merged; omitted.' }, error); }
+    return { ...result, ...(errors.length ? { errors } : {}), ...declared, ...issues.result() };
 }
 
-type DeclaredInput = { name: string; refs: { ref: string; base: string }[]; values: Partial<Record<'module' | 'attach' | 'role', string>> };
+type Attribute = 'module' | 'attach' | 'role';
+type DeclaredInput = { name: string; refs: { ref: string; base: string }[]; values: Partial<Record<Attribute, string>>; conflicts?: ReadonlySet<Attribute> };
 /** Page results only keep section references; the part after the last dot is the section. */
 const sectionBase = (ref: string) => ref.includes('.') ? ref.slice(0, ref.lastIndexOf('.')) : ref;
 const PROPERTY_NAME = { module: PCB_BLOCK_PROPERTIES.module, attach: PCB_BLOCK_PROPERTIES.attach, role: PCB_BLOCK_PROPERTIES.role } as const;
@@ -112,30 +141,39 @@ const PROPERTY_NAME = { module: PCB_BLOCK_PROPERTIES.module, attach: PCB_BLOCK_P
  * reported and omitted rather than guessed; the block itself is kept. A package
  * whose sections are declared in several blocks cannot be placed in one, so it
  * is reported and left out of all of them. */
-function declarationResult(inputs: DeclaredInput[], report: Report): Pick<SchematicGroups, 'declared_blocks' | 'declared_modules'> {
+function declarationResult(inputs: DeclaredInput[], report: DeclarationReport): Pick<SchematicGroups, 'declared_blocks' | 'declared_modules'> {
     const blocksOfBase = new Map<string, Set<string>>();
     for (const input of inputs) for (const { base } of input.refs) blocksOfBase.set(base, (blocksOfBase.get(base) ?? new Set()).add(input.name));
     for (const [base, names] of blocksOfBase) if (names.size > 1) {
-        report(`${base}: sections declared in several PCB blocks (${sorted(names).join(', ')}); omitted from them.`);
+        report({ code: 'PCB_DECLARATION_SECTIONS', component: base,
+            message: `${base}: sections declared in several PCB blocks (${sorted(names).join(', ')}); omitted from them.` });
     }
-    const byName = new Map<string, { refs: Set<string>; values: Record<'module' | 'attach' | 'role', Set<string>> }>();
+    const byName = new Map<string, { refs: Set<string>; values: Record<Attribute, Set<string>>; conflicts: Set<Attribute> }>();
     for (const input of inputs) {
-        const entry = byName.get(input.name) ?? { refs: new Set<string>(), values: { module: new Set<string>(), attach: new Set<string>(), role: new Set<string>() } };
+        const entry = byName.get(input.name) ?? { refs: new Set<string>(), values: { module: new Set<string>(), attach: new Set<string>(), role: new Set<string>() },
+            conflicts: new Set<Attribute>() };
         for (const { ref, base } of input.refs) if (blocksOfBase.get(base)!.size === 1) entry.refs.add(ref);
         for (const key of ['module', 'attach', 'role'] as const) if (input.values[key]) entry.values[key].add(input.values[key]!);
+        // A conflict found on one page stays a conflict after merging with another.
+        for (const key of input.conflicts ?? []) entry.conflicts.add(key);
         byName.set(input.name, entry);
     }
     const blocks: NonNullable<SchematicGroups['declared_blocks']> = [];
     for (const name of sorted(byName.keys())) {
-        const { refs, values } = byName.get(name)!;
+        const { refs, values, conflicts } = byName.get(name)!;
         if (!refs.size) continue;
-        const single = (key: 'module' | 'attach' | 'role') => {
-            if (values[key].size <= 1) return [...values[key]][0];
-            report(`PCB block ${name}: conflicting ${PROPERTY_NAME[key]} values (${sorted(values[key]).join(', ')}); omitted.`);
-            return undefined;
+        const single = (key: Attribute) => {
+            if (values[key].size > 1) {
+                conflicts.add(key);
+                report({ code: 'PCB_DECLARATION_CONFLICT', block: name, property: PROPERTY_NAME[key],
+                    message: `PCB block ${name}: conflicting ${PROPERTY_NAME[key]} values (${sorted(values[key]).join(', ')}); omitted.` });
+            }
+            return conflicts.has(key) ? undefined : [...values[key]][0];
         };
         const module = single('module'), attach = single('attach'), role = single('role');
-        blocks.push({ name, refs: sorted(refs).join(' '), ...(module ? { module } : {}), ...(attach ? { attach_to: attach } : {}), ...(role ? { role } : {}) });
+        const omitted = (['module', 'attach', 'role'] as const).filter(key => conflicts.has(key)).map(key => ATTRIBUTE_FIELD[key]);
+        blocks.push({ name, refs: sorted(refs).join(' '), ...(module ? { module } : {}), ...(attach ? { attach_to: attach } : {}), ...(role ? { role } : {}),
+            ...(omitted.length ? { conflicts: omitted } : {}) });
     }
     const modules = new Map<string, string[]>();
     for (const block of blocks) if (block.module) modules.set(block.module, [...(modules.get(block.module) ?? []), block.name]);
@@ -145,7 +183,7 @@ function declarationResult(inputs: DeclaredInput[], report: Report): Pick<Schema
     };
 }
 
-async function collectSnapshot(report: Report, reportDeclaration: Report): Promise<SchematicGroupsSnapshot> {
+async function collectSnapshot(report: Report, reportDeclaration: DeclarationReport): Promise<SchematicGroupsSnapshot> {
     const document = await eda.dmt_SelectControl.getCurrentDocumentInfo();
     if (document?.documentType !== EDMT_EditorDocumentType.SCHEMATIC_PAGE) {
         throw new Error('Open a schematic page before requesting schematic groups.');
@@ -185,7 +223,8 @@ async function collectSnapshot(report: Report, reportDeclaration: Report): Promi
                 catch (error) { report(`${designator}: part name unavailable; using base reference.`, error); }
                 let pcb: PcbDeclaration | undefined;
                 try { pcb = readPcbDeclaration(typeof primitive.getState_OtherProperty === 'function' ? primitive.getState_OtherProperty() : undefined); }
-                catch (error) { reportDeclaration(`${designator}: component properties unavailable; PCB block declaration omitted.`, error); }
+                catch (error) { reportDeclaration({ code: 'PCB_DECLARATION_READ', component: designator,
+                    message: `${designator}: component properties unavailable; PCB block declaration omitted.` }, error); }
                 let position = { x: NaN, y: NaN };
                 try { position = { x: primitive.getState_X(), y: normWireY(primitive.getState_Y()) }; }
                 catch (error) { report(`${designator}: origin unavailable; using valid pins if possible.`, error); }
@@ -569,7 +608,7 @@ function findMaybeBlocks(components: Component[], graph: WireGraph, report: Repo
 /** The only runtime entry point. Omit snapshot to read the complete current EasyEDA page. */
 export async function getSchematicGroups(snapshot?: SchematicGroupsSnapshot): Promise<SchematicGroups> {
     for (let attempt = 0; ; attempt++) {
-        const issues = diagnostics(), declarationIssues = diagnostics('declarations');
+        const issues = diagnostics(), declarationIssues = declarationDiagnostics();
         const input = prepareSnapshot(snapshot ?? await collectSnapshot(issues.report, declarationIssues.report), issues.report);
         // Stable input order makes both tie-breaking and compact output independent of API enumeration.
         const components = [...input.components].sort((a, b) => compare(a.designator, b.designator) || a.x - b.x || a.y - b.y);
@@ -583,14 +622,13 @@ export async function getSchematicGroups(snapshot?: SchematicGroupsSnapshot): Pr
                 const refs = sectionRefs(components);
                 declared = declarationResult(components.flatMap((c, i) => c.pcb ? [{ name: c.pcb.block, refs: [{ ref: refs[i], base: c.designator }],
                     values: { module: c.pcb.module, attach: c.pcb.attach, role: c.pcb.role } }] : []), declarationIssues.report);
-            } catch (error) { declarationIssues.report('PCB block declarations unavailable; heuristic groups preserved.', error); }
-            const declarationErrors = declarationIssues.result().errors;
+            } catch (error) { declarationIssues.report({ code: 'PCB_DECLARATION_UNAVAILABLE', message: 'PCB block declarations unavailable; heuristic groups preserved.' }, error); }
             return {
                 maybe_blocks,
                 wires: graph.wires.filter(wire => wire.net === null || !shortSymbolsMap.GND.is(wire.net)),
                 ...issues.result(),
                 ...declared,
-                ...(declarationErrors ? { declaration_errors: declarationErrors } : {}),
+                ...declarationIssues.result(),
             };
         } catch (error) {
             if (!(error instanceof InconsistentSnapshot)) throw error;

@@ -75,6 +75,28 @@ test('a failed PCB Block write is logged and neither fails assembly nor skips th
     assert.ok(f.logs.some(message => message.includes('PCB Block property not written for a')));
 });
 
+test('a replaced component keeps the designer\'s PCB declarations over its new block_name', async () => {
+    const f = fixture();
+    const replaced = (id: string, designator: string, block_name: string, pcbProperties: Record<string, string>) =>
+        ({ ...f.plan(id, designator, block_name), replacement: { pcbProperties } });
+    await f.finalize([
+        replaced('a', 'U1', 'generated', { 'PCB Block': 'mcu', 'PCB Module': 'core', 'PCB Role': 'mcu' }),
+        replaced('b', 'C1', 'mcu_caps', { 'PCB Attach': 'mcu' }),
+        replaced('c', 'R1', 'pullups', {}),
+    ]);
+    assert.deepEqual(f.properties.get('a'), { Value: '10k', 'PCB Block': 'mcu', 'PCB Module': 'core', 'PCB Role': 'mcu' });
+    assert.deepEqual(f.properties.get('b'), { Value: '10k', 'PCB Block': 'mcu_caps', 'PCB Attach': 'mcu' }, 'no declared block: block_name is written');
+    assert.deepEqual(f.properties.get('c'), { Value: '10k', 'PCB Block': 'pullups' });
+    assert.deepEqual(f.done, ['a', 'b', 'c']);
+});
+
+test('a failed declaration restore is logged and does not skip the component', async () => {
+    const f = fixture(new Set(['a']));
+    await f.finalize([{ ...f.plan('a', 'U1', 'mcu'), replacement: { pcbProperties: { 'PCB Module': 'core' } } }]);
+    assert.deepEqual(f.done, ['a']);
+    assert.ok(f.logs.some(message => message.includes('PCB block declarations not restored for a')));
+});
+
 const PART = '3a6c559f43b44aff962dd7571d5f44ee';
 const CORE = new Set(['Designator', 'Device', 'Symbol', 'Footprint', 'Unique ID']);
 
