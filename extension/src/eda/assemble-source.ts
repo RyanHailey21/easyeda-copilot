@@ -2088,7 +2088,8 @@ async function finalizeSourceComponents(plans: PlannedComponent[], signal?: Abor
     eda.sys_Log.add(`[source-assemble] Finalized ${completed} components; ${failed} failed`);
 }
 
-async function removeUnusedShortSymbols(): Promise<number> {
+/** Return the short symbols on the page that touch no wire, with the parsed page source. */
+async function findUnusedShortSymbols(): Promise<{ records: ReturnType<typeof parseDocumentSource>; ids: Set<string> } | undefined> {
     const primitives = await eda.sch_PrimitiveComponent.getAll().catch(() => []);
     const shortSymbols = primitives.filter(primitive => {
         const type = primitive.getState_ComponentType();
@@ -2096,10 +2097,10 @@ async function removeUnusedShortSymbols(): Promise<number> {
             type === ESCH_PrimitiveComponentType.NET_PORT ||
             type === ESCH_PrimitiveComponentType.SHORT_CIRCUIT_FLAG;
     });
-    if (!shortSymbols.length) return 0;
+    if (!shortSymbols.length) return undefined;
 
     const source = await eda.sys_FileManager.getDocumentSource();
-    if (!source) return 0;
+    if (!source) return undefined;
     const records = parseDocumentSource(source);
     const wireNets = new Map<string, string>();
     for (const record of records) {
@@ -2126,7 +2127,18 @@ async function removeUnusedShortSymbols(): Promise<number> {
         }));
         if (!connected) removeIds.add(symbolId);
     }
+    return { records, ids: removeIds };
+}
 
+/**
+ * Remove short symbols that touch no wire after assembly.
+ * Symbols in `preserve` were already unconnected before this assembly and belong to the user.
+ */
+async function removeUnusedShortSymbols(preserve: ReadonlySet<string> = new Set()): Promise<number> {
+    const unused = await findUnusedShortSymbols();
+    if (!unused) return 0;
+    const { records } = unused;
+    const removeIds = new Set([...unused.ids].filter(id => !preserve.has(id)));
     if (!removeIds.size) return 0;
     const filtered = records.filter(record => {
         const id = String(record.outer.id ?? '');
@@ -2260,6 +2272,7 @@ export async function assembleCircuitSourceTask(
     if (!eda.checkpointer) throw new Error('Checkpointer is unavailable');
     const checkpointCreated = Boolean(await step(() => eda.checkpointer!.save(true)));
     if (!checkpointCreated) throw new Error('Failed to create schematic assembly checkpoint');
+    const preexistingUnusedShortSymbols = (await step(() => findUnusedShortSymbols()))?.ids ?? new Set<string>();
     let detachedNets: AddedNet[] = [];
 
     try {
@@ -2378,7 +2391,7 @@ export async function assembleCircuitSourceTask(
             await step(() => legacyBlockDrawer(workingCircuit.blocks_rect, offset, signal));
         }
         eda.sys_Log.add('[source-assemble] Stage: short-symbol cleanup', ESYS_LogType.INFO);
-        const removedShortSymbols = await step(() => removeUnusedShortSymbols());
+        const removedShortSymbols = await step(() => removeUnusedShortSymbols(preexistingUnusedShortSymbols));
         eda.sys_Log.add('[source-assemble] Stage: component finalization', ESYS_LogType.INFO);
         await step(() => finalizeSourceComponents([...plans, ...attachmentResult.portPlans], signal));
         if (attachmentResult.unresolved) {
