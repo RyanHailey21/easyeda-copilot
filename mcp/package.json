@@ -43,7 +43,7 @@
     "test:execute-js": "npm run build && node scripts/check-execute-js.mjs",
     "test:pcb-inspection": "node scripts/check-pcb-inspection.mjs",
     "test:pcb-refill-example": "node scripts/check-pcb-refill-example.mjs",
-    "test:pcb-preview": "node scripts/check-pcb-preview.mjs",
+    "test:pcb-preview": "node scripts/check-pcb-preview.mjs && node --import tsx --test tests/pcb-preview.test.ts",
     "test:pcb-validation": "node scripts/check-pcb-validation.mjs",
     "clean": "rimraf dist",
     "typecheck": "tsc --noEmit",

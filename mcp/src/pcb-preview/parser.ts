@@ -56,7 +56,7 @@ function flattenQuadraticBezier(p0: PcbPoint, p1: PcbPoint, p2: PcbPoint, steps 
     for (let i = 1; i <= steps; i++) {
         const t = i / steps;
         const u = 1 - t;
-        const x = u * u * p0.x + 2 * u * t * p1.x + t * t * p2.y;
+        const x = u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x;
         const y = u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y;
         pts.push({ x, y });
     }
@@ -111,25 +111,19 @@ function rotatePoint(p: PcbPoint, cx: number, cy: number, angleDeg: number): Pcb
     return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
 }
 
-function roundedRectPoints(x: number, y: number, w: number, h: number, rot: number, round: number, tolerance?: number): PcbPoint[] {
-    if (tolerance !== undefined) {
-        // Native R has a top-left anchor, positive width, and descends in Y-up coordinates.
-        const r = Math.min(Math.max(0, round), w / 2, h / 2);
-        const points: PcbPoint[] = [];
-        const corners = [{ x: x + w - r, y: y - r }, { x: x + w - r, y: y - h + r },
-            { x: x + r, y: y - h + r }, { x: x + r, y: y - r }];
-        for (let i = 0; i < 4; i++) {
-            const c = corners[i], angle = (90 - i * 90) * Math.PI / 180;
-            const start = { x: c.x + r * Math.cos(angle), y: c.y + r * Math.sin(angle) };
-            const end = { x: c.x + r * Math.cos(angle - Math.PI / 2), y: c.y + r * Math.sin(angle - Math.PI / 2) };
-            points.push(start, ...(r ? tessellateArc(start, end, -90, false, tolerance) ?? [] : []));
-        }
-        return points.map(p => rotatePoint(p, x, y, rot || 0));
+function roundedRectPoints(x: number, y: number, w: number, h: number, rot: number, round: number, tolerance = 0.01): PcbPoint[] {
+    // Native R has a top-left anchor, positive width, and descends in Y-up coordinates.
+    const r = Math.min(Math.max(0, round), w / 2, h / 2);
+    const points: PcbPoint[] = [];
+    const corners = [{ x: x + w - r, y: y - r }, { x: x + w - r, y: y - h + r },
+        { x: x + r, y: y - h + r }, { x: x + r, y: y - r }];
+    for (let i = 0; i < 4; i++) {
+        const c = corners[i], angle = (90 - i * 90) * Math.PI / 180;
+        const start = { x: c.x + r * Math.cos(angle), y: c.y + r * Math.sin(angle) };
+        const end = { x: c.x + r * Math.cos(angle - Math.PI / 2), y: c.y + r * Math.sin(angle - Math.PI / 2) };
+        points.push(start, ...(r ? tessellateArc(start, end, -90, false, tolerance) ?? [] : []));
     }
-    const corners: PcbPoint[] = [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
-    const rotated = corners.map(p => rotatePoint(p, x, y, rot || 0));
-    if (!round || round <= 1e-6) return rotated;
-    return rotated;
+    return points.map(p => rotatePoint(p, x, y, rot || 0));
 }
 
 function samePoint(a: PcbPoint, b: PcbPoint): boolean {
@@ -232,7 +226,6 @@ export function parsePolygonSource(source: RawPcbPolygon['sources'][0], diagnost
                 if (!points) throw new Error('Arc exceeds the geometry limit');
                 current.push(...points);
                 i += 3;
-                if (toleranceMm === undefined) break;
             }
         } else {
             if (diagnostics) {

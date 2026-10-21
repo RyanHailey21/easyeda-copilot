@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### PCB preview
+
+- Preserve native rounded-outline rotation and precision, and render centered, offset and polygon-pad drills. Correct preview rectangle/Bezier/arc parsing, retain small and nested copper cutouts, include through pads/vias on inner-layer previews and preserve polygon stroke widths.
+
 ### PCB analysis export
 
 - Add opt-in RoutingBoard V2 export with native pads, holes, copper IDs and Pour/Poured/Fill evidence. `export_pcb_routing_board` saves the board, native capture and diagnostics for auditing. Existing V1 routing requests and preview reads retain their defaults; no routing or refill runs during V2 export. The backend contract is consumed from the local backend package.

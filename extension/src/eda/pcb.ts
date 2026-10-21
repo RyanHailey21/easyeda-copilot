@@ -159,12 +159,20 @@ function polygonSourceToPoints(source: TPCB_PolygonSourceArray) {
             const width = readNumber(source, index + 2);
             const height = readNumber(source, index + 3);
             if (x !== undefined && y !== undefined && width !== undefined && height !== undefined) {
-                points.push(
-                    { x, y },
-                    { x: x + width, y },
-                    { x: x + width, y: y - height },
-                    { x, y: y - height },
-                );
+                const rotation = (readNumber(source, index + 4) ?? 0) * Math.PI / 180;
+                const radius = Math.min(Math.max(0, readNumber(source, index + 5) ?? 0), width / 2, height / 2);
+                const corners = [{ x: x + width - radius, y: y - radius },
+                    { x: x + width - radius, y: y - height + radius },
+                    { x: x + radius, y: y - height + radius }, { x: x + radius, y: y - radius }];
+                for (let i = 0; i < corners.length; i++) {
+                    const center = corners[i], angle = (90 - i * 90) * Math.PI / 180;
+                    const start = { x: center.x + radius * Math.cos(angle), y: center.y + radius * Math.sin(angle) };
+                    const end = { x: center.x + radius * Math.cos(angle - Math.PI / 2), y: center.y + radius * Math.sin(angle - Math.PI / 2) };
+                    for (const p of [start, ...(radius ? arcPoints(start, end, -90, 3) : [])]) {
+                        points.push({ x: x + (p.x - x) * Math.cos(rotation) - (p.y - y) * Math.sin(rotation),
+                            y: y + (p.x - x) * Math.sin(rotation) + (p.y - y) * Math.cos(rotation) });
+                    }
+                }
             }
             index += 6;
             continue;
@@ -192,7 +200,7 @@ function polygonSourceToPoints(source: TPCB_PolygonSourceArray) {
             while (isNumberToken(source[index]) && isNumberToken(source[index + 1]) && isNumberToken(source[index + 2])) {
                 const end = { x: source[index + 1] as number, y: source[index + 2] as number };
                 const start = points[points.length - 1];
-                points.push(...(start ? arcPoints(start, end, source[index] as number) : [end]));
+                points.push(...(start ? arcPoints(start, end, source[index] as number, 3) : [end]));
                 index += 3;
             }
             continue;
@@ -303,7 +311,7 @@ async function readBoardPolygon(polylines?: IPCB_PrimitivePolyline[]) {
         .filter(points => points.length >= 3)
         .sort((a, b) => polygonArea(b) - polygonArea(a));
 
-    if (polylinePolygons[0]) return polylinePolygons[0].map(p => toExplainPoint(p));
+    if (polylinePolygons[0]) return polylinePolygons[0].map(p => ({ x: milToMm(p.x), y: milToMm(p.y) }));
     return undefined;
 }
 
@@ -663,9 +671,10 @@ function convertSourceArray(source: TPCB_PolygonSourceArray, coordConv: (v: numb
             );
             i += 3;
         } else if (cmd === 'ARC' || cmd === 'CARC') {
-            const angle = source[i], ex = source[i + 1], ey = source[i + 2];
-            out.push(angle, typeof ex === 'number' ? coordConv(ex) : ex, typeof ey === 'number' ? coordConv(ey) : ey);
-            i += 3;
+            while (isNumberToken(source[i]) && isNumberToken(source[i + 1]) && isNumberToken(source[i + 2])) {
+                out.push(source[i], coordConv(source[i + 1] as number), coordConv(source[i + 2] as number));
+                i += 3;
+            }
         } else {
             while (i < source.length && typeof source[i] === 'number') {
                 out.push(source[i]);
@@ -727,7 +736,7 @@ export async function getPcbRaw(routing = false): Promise<RawPcb> {
 
     const pads: RawPcbPad[] = []
     const padShape = (shape: TPCB_PrimitivePadShape | null | undefined) => shape?.map((v, i) => {
-        if (typeof v === 'number') return routing && shape[0] === EPCB_PrimitivePadShapeType.REGULAR_POLYGON && i === 2 ? v : milToMm(v);
+        if (typeof v === 'number') return shape[0] === EPCB_PrimitivePadShapeType.REGULAR_POLYGON && i === 2 ? v : milToMm(v);
         if (Array.isArray(v)) return rawSourcesFromComplex(v, milToMm);
         return v;
     });
