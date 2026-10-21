@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### PCB analysis export
+
+- Add opt-in RoutingBoard V2 export with native pads, holes, copper IDs and Pour/Poured/Fill evidence. `export_pcb_routing_board` saves the board, native capture and diagnostics for auditing. Existing V1 routing requests and preview reads retain their defaults; no routing or refill runs during V2 export. The backend contract is consumed from the local backend package.
+
 ### Schematic groups
 
 - Keep the designer's `PCB Block`, `PCB Module`, `PCB Attach` and `PCB Role` when `beautify_schematic_on_current_page` or source-path `replace_components` rebuilds a component; `block_name` only fills a missing `PCB Block`. `declaration_errors` entries now carry a stable `code` (with `component`, `block` or `property`), a conflicting block attribute stays omitted across pages and is listed in `conflicts`, and declaration read errors reach PCB validation even when no declared block remains.
