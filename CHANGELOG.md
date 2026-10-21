@@ -11,6 +11,10 @@
 
 - Honor explicit `PCB_LAYOUT_SUBTREE_WORKERS`, `PCB_BOARD_PACKER_THREADS` and `PCB_POST_PLACE_THREADS` values up to the number of logical cores instead of clamping them to the default. The default stays at half the logical cores, at most 8. Requires a backend that applies the same rule.
 
+### Schematic fixes
+
+- Keep net ports, net flags and short-circuit flags that were already unconnected before `extract_circuit_on_current_page` ran. The final cleanup removed every short symbol on the page that touched no wire, including the designer's own unattached ports; it now only removes symbols that lost their connection during this assembly.
+
 ## 1.3.2 - 2026-10-16
 
 ### Schematic fixes
