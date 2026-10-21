@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { RawPcb, RawPcbPolygon } from '@copilot/shared/types/pcb/raw';
 import { importEasyEdaBoardV2, nativeCopperPolygons } from '../src/routing/easyeda-board-v2';
 import { parsePolygonSource } from '../src/pcb-preview/parser';
-import { readEasyEdaPourRefillRules } from '../src/routing/easyeda-drc-adapter';
+import { readEasyEdaBlindViaSpan, readEasyEdaPourRefillRules } from '../src/routing/easyeda-drc-adapter';
 import { registerPcbRoutingTools } from '../src/tools/pcb/pcb-routing';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -99,7 +99,7 @@ test('missing Poured and verified empty Poured are different states; Fill is ind
     assert.equal(importEasyEdaBoardV2(source, data, drc).board.copper.fixed.zones[2].filledPolygons[0].status, 'unsupported');
 });
 
-test('special pad shapes cover physical layers; unknown via spans fail instead of becoming through', () => {
+test('special pad shapes and suture vias cover physical layers; unresolved via spans fail', () => {
     const data = raw();
     data.routing!.layers = ['TOP', 'INNER_1', 'BOTTOM'];
     data.routing!.planeLayers = ['INNER_1'];
@@ -108,8 +108,20 @@ test('special pad shapes cover physical layers; unknown via spans fail instead o
     assert.deepEqual(board.pads[1].shapesByLayer?.INNER_1, { kind: 'rect', widthMm: 3, heightMm: 4 });
     assert.equal(board.pads[1].shapesByLayer?.BOTTOM.kind, 'circle');
     assert.ok(diagnostics.some(d => d.code === 'EASYEDA_V2_PLANE_COPPER_UNAVAILABLE'));
-    data.vias[0].viaType = 1;
+    data.vias[0] = { id: 'suture', viaType: 2, blindViaRule: '', net: 'SIG', x: 3, y: 4, diameter: 0.6, drill: 0.3 };
+    assert.deepEqual(importEasyEdaBoardV2(source, data, drc).board.copper.fixed.vias[0], {
+        id: 'suture', net: 'SIG', at: { x: 3, y: -4 }, diameterMm: 0.6, drillMm: 0.3,
+        type: 'through', fromLayer: 'TOP', toLayer: 'BOTTOM',
+    });
+    delete data.vias[0].blindViaRule;
+    assert.equal(importEasyEdaBoardV2(source, data, drc).board.copper.fixed.vias[0].type, 'through');
+    data.vias[0].blindViaRule = 'unresolved';
     assert.throws(() => importEasyEdaBoardV2(source, data, drc), /Unresolved via span/);
+    delete data.vias[0].blindViaRule;
+    for (const viaType of [1, 3, undefined]) {
+        data.vias[0].viaType = viaType;
+        assert.throws(() => importEasyEdaBoardV2(source, data, drc), /Unresolved via span/);
+    }
     delete data.routing;
     assert.throws(() => importEasyEdaBoardV2(source, data, drc), /Reload the extension/);
 });
@@ -125,6 +137,59 @@ test('Pour rules read both pad groups and reject a nonuniform scalar clearance',
     assert.deepEqual(rules.padConnection?.singleLayer, { mode: 'thermal', thermalGapMm: 0.2, spokeWidthMm: 0.3, spokeAngleDeg: 45 });
     assert.equal(rules.padConnection?.multiLayer?.mode, 'solid');
     assert.ok(rules.unresolved.some(r => r.includes('nonuniform')));
+});
+
+test('blind/buried via rules resolve native keys and names in physical layer order', () => {
+    const data = raw();
+    data.routing!.layers = ['TOP', 'INNER_1', 'INNER_2', 'INNER_3', 'INNER_4', 'BOTTOM'];
+    const table = [
+        { key: 'blind0', name: 'top blind', startLayer: 1, endLayer: 15, used: false },
+        { key: 'blind1', name: 'bottom blind', startLayer: 2, endLayer: 18 },
+        { key: 'blind2', name: 'buried', startLayer: 17, endLayer: 15 },
+        { key: 'blind3', name: 'through', startLayer: 2, endLayer: 1 },
+    ];
+    const rules = { ruleConfiguration: { Physics: { 'Blind/Buried Via': {
+        blindVia: { isSetDefault: true, table },
+        custom: { table: [{ key: 'blind0', startLayer: 16, endLayer: 17 }] },
+    } } }, netRules: [{ type: 'net' as const, name: 'SIG', 'Blind/Buried Via': 'custom' }] };
+    data.vias = ['blind0', 'bottom blind', 'blind2', 'blind3'].map((blindViaRule, i) => ({
+        ...data.vias[0], id: `v${i}`, viaType: 1, blindViaRule,
+    }));
+    const vias = importEasyEdaBoardV2(source, data, rules).board.copper.fixed.vias;
+    assert.deepEqual(vias.map(v => [v.type, v.fromLayer, v.toLayer]), [
+        ['blind-buried', 'TOP', 'INNER_1'], ['blind-buried', 'INNER_4', 'BOTTOM'],
+        ['blind-buried', 'INNER_1', 'INNER_3'], ['through', 'TOP', 'BOTTOM'],
+    ]);
+    assert.deepEqual(vias[0], { id: 'v0', at: { x: 3, y: -4 }, diameterMm: 0.6, drillMm: 0.3,
+        type: 'blind-buried', fromLayer: 'TOP', toLayer: 'INNER_1' });
+    data.vias[0].net = 'SIG';
+    const selected = importEasyEdaBoardV2(source, data, rules).board.copper.fixed.vias[0];
+    assert.deepEqual([selected.fromLayer, selected.toLayer], ['INNER_2', 'INNER_3']);
+    for (const viaType of [0, 2]) {
+        data.vias[0].viaType = viaType;
+        assert.equal(importEasyEdaBoardV2(source, data, rules).board.copper.fixed.vias[0].type, 'blind-buried');
+    }
+    delete data.vias[0].net;
+    data.vias[1].blindViaRule = 'blind1';
+    table[1].name = 'blind0';
+    assert.equal(importEasyEdaBoardV2(source, data, rules).board.copper.fixed.vias[0].fromLayer, 'INNER_4');
+    table[1].name = 'bottom blind';
+    data.vias[0].blindViaRule = 'missing';
+    assert.throws(() => importEasyEdaBoardV2(source, data, rules), /Unresolved via span v0/);
+    data.vias[0].blindViaRule = 'blind0';
+    for (const endLayer of [1, 19, 3, 15.5, NaN]) {
+        table[0].endLayer = endLayer;
+        assert.throws(() => importEasyEdaBoardV2(source, data, rules), /Unresolved via span v0/);
+    }
+    table[0] = { key: 'blind0', name: 'top blind', startLayer: 1, endLayer: 15, used: false };
+    table.push({ ...table[0] });
+    assert.throws(() => importEasyEdaBoardV2(source, data, rules), /Unresolved via span v0/);
+    rules.netRules[0]['Blind/Buried Via'] = 'missing';
+    data.vias[0].net = 'SIG';
+    assert.throws(() => importEasyEdaBoardV2(source, data, rules), /Unresolved via span v0/);
+    const inherited = { ...rules, netRules: [{ type: 'netClass' as const, name: 'signals',
+        'Blind/Buried Via': 'custom', sub: [{ type: 'net' as const, name: 'SIG' }] }] };
+    assert.deepEqual(readEasyEdaBlindViaSpan(inherited, 'blind0', 'SIG'), { startLayer: 16, endLayer: 17 });
 });
 
 test('export tool requests V2, saves native evidence and never applies routing', async () => {

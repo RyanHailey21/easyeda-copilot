@@ -458,6 +458,23 @@ function preset(configuration: JsonRecord, category: string, family: string, nam
         ?? (strict ? undefined : Object.values(presets).map(record).find(Boolean));
 }
 
+/** Resolve the native blind/buried item name (or key) in its selected preset. */
+export function readEasyEdaBlindViaSpan(source: PcbDrcBundle, name: string, net?: string) {
+    if (!record(record(source.ruleConfiguration.Physics)?.['Blind/Buried Via'])) return undefined;
+    const rule = sourceNetRule(source.netRules, net ?? '');
+    const netClass = source.netRules.find(item => item.type === 'netClass' && item.sub.some(member => member.name === net));
+    const assigned = rule['Blind/Buried Via'] === undefined ? netClass?.['Blind/Buried Via'] : rule['Blind/Buried Via'];
+    const selected = preset(source.ruleConfiguration, 'Physics', 'Blind/Buried Via', assigned, true);
+    const rows = Array.isArray(selected?.table) ? selected.table.map(record).filter(item => !!item) : [];
+    const byName = rows.filter(item => item.name === name);
+    const matches = byName.length ? byName : rows.filter(item => item.key === name);
+    if (matches.length !== 1) return undefined;
+    const { startLayer, endLayer } = matches[0];
+    if (typeof startLayer !== 'number' || !Number.isInteger(startLayer)
+        || typeof endLayer !== 'number' || !Number.isInteger(endLayer)) return undefined;
+    return { startLayer, endLayer };
+}
+
 /** Only materialize verified scalar values; retain nonuniform/unresolved tables as limitations. */
 export function readEasyEdaPourRefillRules(source: PcbDrcBundle, net?: string): PourZoneV2['refillRules'] {
     const unresolved: string[] = [];

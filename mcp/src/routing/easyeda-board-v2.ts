@@ -5,7 +5,7 @@ import type { RawPcb, RawPcbPolygon } from '@copilot/shared/types/pcb/raw';
 import type { PcbDrcBundle } from '@copilot/shared/types/pcb/drc';
 import { parsePolygonSource } from '../pcb-preview/parser';
 import { importEasyEdaAutorouteJson, tessellateArc } from './easyeda-autoroute-adapter';
-import { mergeEasyEdaDrcIntoRoutingRules, readEasyEdaPourRefillRules } from './easyeda-drc-adapter';
+import { mergeEasyEdaDrcIntoRoutingRules, readEasyEdaBlindViaSpan, readEasyEdaPourRefillRules } from './easyeda-drc-adapter';
 
 const TOLERANCE_MM = 0.001;
 const SCALE = 1_000_000;
@@ -208,9 +208,18 @@ export function importEasyEdaBoardV2(source: Record<string, unknown>, raw: RawPc
                 }),
             ],
             vias: raw.vias.map(v => {
-                if (v.viaType !== 0) throw new Error(`Unresolved via span/type ${v.id} (rule: ${v.blindViaRule ?? 'missing'})`);
+                let from = 0, to = layerNames.length - 1;
+                if (v.blindViaRule) {
+                    const span = readEasyEdaBlindViaSpan(drc, v.blindViaRule, v.net);
+                    const start = span ? layerNames.indexOf(layerName(span.startLayer)) : -1;
+                    const end = span ? layerNames.indexOf(layerName(span.endLayer)) : -1;
+                    if (start < 0 || end < 0 || start === end) throw new Error(`Unresolved via span ${v.id} (rule: ${v.blindViaRule})`);
+                    from = Math.min(start, end); to = Math.max(start, end);
+                } else if (v.viaType !== 0 && v.viaType !== 2) {
+                    throw new Error(`Unresolved via span/type ${v.id} (rule: missing)`);
+                }
                 return { id: v.id, ...(v.net ? { net: v.net } : {}), at: point(v), diameterMm: v.diameter, drillMm: v.drill,
-                    type: 'through', fromLayer: layerNames[0], toLayer: layerNames.at(-1)! };
+                    type: from === 0 && to === layerNames.length - 1 ? 'through' : 'blind-buried', fromLayer: layerNames[from], toLayer: layerNames[to] };
             }), zones,
         } },
     };
