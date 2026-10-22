@@ -8,8 +8,10 @@ import { registerPcbPreviewTools } from "./pcb-preview";
 import { registerPcbRoutingTools } from "./pcb-routing";
 import { registerPcbValidationTools } from "./pcb-validation";
 import { toolHandler } from '../handler';
+import { registerOfflinePcbTools } from './pcb-offline';
 
 export function registerPcbTools(server: McpServer, bridge: Bridge) {
+    registerOfflinePcbTools(server);
     server.registerTool(
         'get_pcb_stack_layers',
         {
