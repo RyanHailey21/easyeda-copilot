@@ -8,6 +8,7 @@
 
 ### PCB analysis export
 
+- Ignore the EasyEDA API phantom hole on TOP/BOTTOM `POLYGON` pads in V2, with a pad-specific diagnostic. Preserve raw capture evidence, multilayer pad drills and vias.
 - Export native stitching vias (`SUTURE`) and resolve blind/buried via spans from the selected EasyEDA rule's start/end layers in V2. Preserve physical layer order and reject unresolved ranges without assuming a through connection; V1 is unchanged.
 - Add opt-in RoutingBoard V2 export with native pads, holes, copper IDs and Pour/Poured/Fill evidence. `export_pcb_routing_board` saves the board, native capture and diagnostics for auditing. Existing V1 routing requests and preview reads retain their defaults; no routing or refill runs during V2 export. The backend contract is consumed from the local backend package.
 

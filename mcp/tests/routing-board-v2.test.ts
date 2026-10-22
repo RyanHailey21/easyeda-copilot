@@ -19,7 +19,7 @@ const source = {
 const drc = { ruleConfiguration: {}, netRules: [] };
 const ring = (x: number, y: number, w: number, h: number) => [x, y, 'L', x + w, y, x + w, y + h, x, y + h, 'Z'];
 const raw = (): RawPcb => ({ components: [{ id: 'c1', designator: 'U1', x: 5, y: 6, rotate: 90, layer: 'BOTTOM', value: 'IC', footprintName: 'QFN' }],
-    pads: [{ id: 'p1', component: 'U1', padNumber: '1', x: 5, y: 6, rotation: Math.PI / 2, layer: 'BOTTOM', net: 'SIG',
+    pads: [{ id: 'p1', component: 'U1', padNumber: '1', x: 5, y: 6, rotation: Math.PI / 2, layer: 'MULTI', net: 'SIG',
         shape: ['POLYGON', [ring(4, 5, 2, 2)]], plated: true,
         hole: { data: ['SLOT', 0.5, 1], offsetX: 0.2, offsetY: 0.3, rotation: Math.PI / 4 } },
     { id: 'standalone', padNumber: '', x: 2, y: 2, rotation: 0, layer: 'MULTI', net: '', shape: ['ELLIPSE', 2, 2], plated: false,
@@ -56,6 +56,47 @@ test('native pads, absolute polygon shapes, bottom transforms, slots and netless
     assert.equal(board.copper.fixed.vias[0].net, undefined);
     assert.equal(board.copper.fixed.vias[0].toLayer, 'BOTTOM');
     assert.deepEqual(board.copper.editable, { tracks: [], vias: [], zones: [] });
+});
+
+test('V2 omits API holes on TOP/BOTTOM POLYGON pads with a diagnostic and preserves raw evidence', () => {
+    for (const layer of ['TOP', 'BOTTOM'] as const) {
+        const data = raw();
+        data.pads[0].layer = layer;
+        data.pads[0].hole!.data = ['ROUND', 0.5334];
+        const before = structuredClone(data);
+        const { board, diagnostics } = importEasyEdaBoardV2(source, data, drc);
+        assert.equal('hole' in board.pads[0], false);
+        assert.deepEqual(board.pads[0].layers, [layer]);
+        assert.equal(board.pads[0].shape.kind, 'polygon');
+        const warnings = diagnostics.filter(d => d.code === 'EASYEDA_V2_SINGLE_LAYER_POLYGON_HOLE_IGNORED');
+        assert.equal(warnings.length, 1);
+        assert.equal(warnings[0].severity, 'warning');
+        assert.match(warnings[0].message, /U1\.1 \(p1\)/);
+        assert.ok(warnings[0].message.includes(layer));
+        assert.deepEqual(data, before);
+        delete data.pads[0].hole;
+        assert.equal(importEasyEdaBoardV2(source, data, drc).diagnostics.some(d => d.code === warnings[0].code), false);
+    }
+});
+
+test('V2 hole workaround preserves multilayer polygon and non-polygon round/slot drills', () => {
+    for (const shape of [['POLYGON', [ring(4, 5, 2, 2)]], ['RECT', 2, 2, 0]] as RawPcb['pads'][number]['shape'][]) {
+        for (const hole of [['ROUND', 0.5], ['SLOT', 0.5, 1]]) {
+            const data = raw();
+            data.pads[0].shape = shape;
+            data.pads[0].layer = shape?.[0] === 'POLYGON' ? 'MULTI' : 'TOP';
+            data.pads[0].hole!.data = hole;
+            const { board, diagnostics } = importEasyEdaBoardV2(source, data, drc);
+            assert.deepEqual(board.pads[0].hole, {
+                shape: hole[0] === 'ROUND' ? 'round' : 'slot', diameterMm: 0.5,
+                ...(hole[0] === 'SLOT' ? { slotLengthMm: 1 } : {}),
+                offset: { x: 0.2, y: -0.3 }, rotationDeg: -45, plated: true,
+            });
+            assert.equal(board.pads[1].hole?.plated, false);
+            assert.equal(board.copper.fixed.vias[0].drillMm, 0.3);
+            assert.equal(diagnostics.some(d => d.code === 'EASYEDA_V2_SINGLE_LAYER_POLYGON_HOLE_IGNORED'), false);
+        }
+    }
 });
 
 test('nested islands and very small holes are retained without preview filtering', () => {

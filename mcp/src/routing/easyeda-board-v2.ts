@@ -178,6 +178,12 @@ export function importEasyEdaBoardV2(source: Record<string, unknown>, raw: RawPc
         }),
         pads: raw.pads.filter(p => !drillOnly(p) && (copperLayer(p.layer) || p.layer === 'MULTI')).map(p => {
             if (!p.id) throw new Error('Pad has no native ID');
+            // EasyEDA can report a phantom drill for single-layer POLYGON pads whose source has hole:null.
+            const ignoreHole = !!p.hole && p.shape?.[0] === 'POLYGON' && (p.layer === 'TOP' || p.layer === 'BOTTOM');
+            if (ignoreHole) diagnostics.push({
+                code: 'EASYEDA_V2_SINGLE_LAYER_POLYGON_HOLE_IGNORED', severity: 'warning',
+                message: `${p.component ?? 'standalone'}.${p.padNumber} (${p.id}): ignored API hole on ${p.layer} POLYGON pad (EasyEDA compatibility workaround).`,
+            });
             const layers = p.layer === 'MULTI' ? layerNames : [p.layer];
             const at = point(p), angle = -degrees(p.rotation) * Math.PI / 180;
             // Native POLYGON pad commands are absolute, including bottom-side mirroring.
@@ -191,7 +197,7 @@ export function importEasyEdaBoardV2(source: Record<string, unknown>, raw: RawPc
             }
             return { id: p.id, component: p.component, number: p.padNumber, ...(p.net ? { net: p.net } : {}), at: point(p), rotationDeg: degrees(p.rotation),
                 layers, shape: padShape(p.shape, localize), ...(p.specialPad?.length ? { shapesByLayer: Object.fromEntries(layers.map(l => [l, shapesByLayer[l] ?? padShape(p.shape, localize)])) } : {}),
-                ...(p.hole ? { hole: padHole(p) } : {}),
+                ...(p.hole && !ignoreHole ? { hole: padHole(p) } : {}),
             };
         }),
         copper: { editable: { tracks: [], vias: [], zones: [] }, fixed: {
